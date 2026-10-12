@@ -69,3 +69,45 @@ HANDLERS = {
     "1": handle_create, "2": handle_list, "3": handle_assign, "4": handle_status,
     "5": handle_reopen, "6": handle_queue, "7": handle_reports,
 }
+
+MENU = """
+--- CAMPUSFLOW ---
+1. Create ticket
+2. List / view tickets
+3. Assign ticket
+4. Update status
+5. Reopen resolved ticket
+6. Work queue
+7. Reports
+8. Exit"""
+
+
+# ------------------------------------------------------------ ENGINEER A: loop
+def main():
+    try:
+        tickets = load_tickets(DATA_FILE)
+    except StorageError as err:
+        print(f"[Error] {err}")
+        return 1
+
+    while True:
+        print(MENU)
+        choice = input("Choose 1-8: ").strip()
+        if choice == "8":
+            print("Goodbye.")
+            return 0
+        handler = HANDLERS.get(choice)
+        if handler is None:
+            print("[Error] Please choose a number from 1 to 8.")
+            continue
+        try:
+            handler(tickets)
+        except (TicketError, StorageError) as err:
+            print(f"[Error] {err}")
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye.")
+            return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
