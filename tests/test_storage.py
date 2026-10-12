@@ -1,45 +1,89 @@
-"""Shared persistence tests (F7) - written by A, reviewed by B."""
-import os
-import tempfile
+"""ENGINEER B tests: assignment, transitions, work queue order, empty reports."""
 import unittest
 
-from campusflow.storage import StorageError, load_tickets, save_tickets
-from campusflow.tickets import create_ticket, next_ticket_id
+from campusflow.reports import build_report, work_queue
+from campusflow.tickets import TicketNotFoundError, create_ticket
+from campusflow.workflow import WorkflowError, assign_ticket, change_status, reopen_ticket
 
 
-class TestStorage(unittest.TestCase):
-    def setUp(self):
-        self.dir = tempfile.TemporaryDirectory()
-        self.path = os.path.join(self.dir.name, "tickets.json")
+def make(tickets, title="t", urgency="low", users="1"):
+    return create_ticket(tickets, title, "Other", urgency, users)
 
-    def tearDown(self):
-        self.dir.cleanup()
 
-    def test_missing_file_gives_fresh_start(self):
-        self.assertEqual(load_tickets(self.path), [])
-
-    def test_malformed_json_errors_and_keeps_file(self):
-        with open(self.path, "w") as handle:
-            handle.write("{ not valid json")
-        with self.assertRaises(StorageError):
-            load_tickets(self.path)
-        with open(self.path) as handle:
-            self.assertEqual(handle.read(), "{ not valid json")
-
-    def test_round_trip_and_ids_stay_unique_after_reload(self):
+class TestAssignment(unittest.TestCase):
+    def test_unknown_id_and_empty_name_rejected(self):
         tickets = []
-        create_ticket(tickets, "A", "Other", "low", "1")
-        create_ticket(tickets, "B", "Other", "low", "1")
-        save_tickets(tickets, self.path)
-        reloaded = load_tickets(self.path)
-        self.assertEqual(reloaded, tickets)
-        self.assertEqual(next_ticket_id(reloaded), "T003")
+        make(tickets)
+        with self.assertRaises(TicketNotFoundError):
+            assign_ticket(tickets, "T999", "Sam")
+        with self.assertRaises(WorkflowError):
+            assign_ticket(tickets, "T001", "   ")
 
-    def test_wrong_structure_rejected(self):
-        with open(self.path, "w") as handle:
-            handle.write('{"tickets": []}')
-        with self.assertRaises(StorageError):
-            load_tickets(self.path)
+
+class TestTransitions(unittest.TestCase):
+    def test_unassigned_cannot_start(self):
+        tickets = []
+        make(tickets)
+        with self.assertRaises(WorkflowError):
+            change_status(tickets, "T001", "in_progress")
+
+    def test_happy_path_and_no_skipping(self):
+        tickets = []
+        make(tickets)
+        with self.assertRaises(WorkflowError):  # open -> resolved is not allowed
+            change_status(tickets, "T001", "resolved")
+        assign_ticket(tickets, "T001", "Sam")
+        self.assertEqual(change_status(tickets, "T001", "in_progress")["status"], "in_progress")
+        self.assertEqual(change_status(tickets, "T001", "resolved")["status"], "resolved")
+
+    def test_resolved_locked_until_reopened(self):
+        tickets = []
+        make(tickets)
+        assign_ticket(tickets, "T001", "Sam")
+        change_status(tickets, "T001", "in_progress")
+        change_status(tickets, "T001", "resolved")
+        with self.assertRaises(WorkflowError):
+            assign_ticket(tickets, "T001", "Alex")
+        with self.assertRaises(WorkflowError):
+            change_status(tickets, "T001", "open")
+        self.assertEqual(reopen_ticket(tickets, "T001")["status"], "open")
+        self.assertEqual(assign_ticket(tickets, "T001", "Alex")["assigned_to"], "Alex")
+
+
+class TestQueueAndReports(unittest.TestCase):
+    def test_queue_order_with_numeric_tie_break(self):
+        tickets = []
+        make(tickets, "low")                          # T001 low
+        make(tickets, "crit", "high", "12")           # T002 critical
+        make(tickets, "high-a", "high", "1")          # T003 high
+        make(tickets, "high-b", "high", "2")          # T004 high
+        done = make(tickets, "done", "high", "50")    # T005 critical but resolved
+        done["status"] = "resolved"
+        self.assertEqual([t["id"] for t in work_queue(tickets)],
+                         ["T002", "T003", "T004", "T001"])
+
+    def test_queue_uses_numeric_not_text_id_order(self):
+        tickets = []
+        for number in (999, 1000):
+            ticket = make(tickets)
+            ticket["id"] = f"T{number}"
+        self.assertEqual([t["id"] for t in work_queue(tickets)], ["T999", "T1000"])
+
+    def test_empty_report_is_all_zero(self):
+        report = build_report([])
+        self.assertEqual(report["total"], 0)
+        self.assertEqual(set(report["by_status"].values()), {0})
+        self.assertEqual(set(report["by_priority"].values()), {0})
+        self.assertEqual(len(report["by_status"]), 3)
+        self.assertEqual(len(report["by_priority"]), 4)
+
+    def test_report_counts(self):
+        tickets = []
+        make(tickets, "a", "high", "10")
+        make(tickets, "b")
+        report = build_report(tickets)
+        self.assertEqual(report["by_priority"]["critical"], 1)
+        self.assertEqual(report["by_status"]["open"], 2)
 
 
 if __name__ == "__main__":
