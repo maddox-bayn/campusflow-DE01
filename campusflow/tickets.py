@@ -1,133 +1,139 @@
-import json
-import os
+"""Ticket creation, validation, lookup and display (F1 CREATE, F2 LIST / VIEW).
+
+OWNER: Engineer A  (branch feat/1-ticket-core-management)
+
+Tickets are plain dictionaries kept in one in-memory list:
+    id, title, category, urgency, affected_users, priority, status, assigned_to
+"""
+
+CATEGORIES = ("Network", "Hardware", "Software", "Other")
+URGENCIES = ("low", "medium", "high")
 
 
-allowed_categories= ["Network", "Hardware", "Software", "Others"]
-allowed_urgency = ["low", "medium", "high"]
+class TicketError(Exception):
+    """Base class for every expected, user-facing error."""
 
-class CampusFlow:
 
-    def __init__(self, file_name ="store_tickets.json"):
-        self.file_name = file_name
-        self.tickets = {}
-        self.num_id = 1
-        self.load_data()
-    # function to calculate the priority 
-    def calculate_priority(self, urgency, affected_users):
-        # Validating for the critical
-        if urgency == "high" and affected_users >= 10:
-            return "Critical"
-        # Validating for the high
-        if urgency == "high" or affected_users >= 10:
-            return "High"
-        # Validating for medium
-        if urgency == "medium" or affected_users >= 3:
-            return "Medium"
-        return "Low"
-    # function that write to a file in json format
-    def save_record(self):
-        saved_data ={"num_id": self.num_id, "tickets": self.tickets}
-        try:
-            with open(self.file_name,"w") as file:
-                json.dump(saved_data, file, indent=4)
-        except Exception as err:
-            print(f"An error occured, state error as {err}")
-    # function that read file from json to python
-    def load_data(self):
-        # check if the file exist 
-        if not os.path.exists(self.file_name):
-            print(f"this file {self.file_name} does not exist")
-            return
-        try:
-            with open(self.file_name, "r") as infile:
-                saved_data = json.load(infile)
-                self.tickets = saved_data.get("tickets", {})
-                self.num_id = saved_data.get("num_id", 1)
-        except json.JSONDecodeError as e:
-            print(f"this file {self.file_name} is empty {e}, entering first data")
-            return
-    # function for ticket creation
-    def create_ticket(self):
-        title = input("Enter title: ").strip()
-        if not title:
-            print("Title can't be empty")
-            return
-        # Validating category
-        category = input("Enter Category: ").strip()
-        if category not in allowed_categories:
-            print(f"invalid category, category must be in {allowed_categories}")
-            return
-        # Validating urgency
-        urgency = input("Enter Urgency: ").strip().lower()
-        
-        if urgency not in allowed_urgency:
-            print("Invalid urgency level: {urgency}")
-            return
-        # validating the affected users
-        raw_users = input("Enter affected user: ").strip()
-        try:
-            affected_users = int(raw_users)
-            if affected_users <=0 or str(affected_users) != raw_users:
-                raise ValueError
-        except ValueError:
-            print("invalid affected users")
-            return
-        priority= self.calculate_priority(urgency, affected_users)
-        user_id = f"F-{self.num_id:03d}"
-        self.num_id += 1
-        self.tickets[user_id]={
-            "id": user_id,
-            "title": title,
-            "category": category,
-            "urgency": urgency,
-            "affected_users": affected_users,
-            "priority": priority,
-            "status": "open",
-            "assigned_to":None
-        }
-        self.save_record()
-        print(f"Success! Ticket id {user_id} logged with {priority} priority")
-    # function to list and view ticket
-    def list_view_tickets(self):
-        if not self.tickets:
-            print(f"This ticket found in the tickets")
-            return
-        print(f"{'ID':<6} | {'Category':<10} | {'Priority':<9} | {'Status':<12} | {'Assigned Agent'}")
-        print("-" * 65)
-        for tid, t in self.tickets.items():
-            agent = t["assigned_to"] if t["assigned_to"] else "unassigned"
-            print(f"{tid:<6} | {t['category']:<10} | {t['priority']:<9} | {t['status']:<12} | {agent}")
-        enter_id = input("\nEnter Ticket id: or hit enter to skip").strip().upper()
-        if enter_id not in self.tickets:
-            print(f"this Id {enter_id}can't be fond in tickets")
-            return
-        t = self.tickets[enter_id]
-        print(f"\n================ [{t['id']}] DETAIL METRICS ================")
-        print(f" Title:          {t['title']}")
-        print(f" Category:       {t['category']}")
-        print(f" Urgency Level:  {t['urgency'].upper()}")
-        print(f" Affected Users: {t['affected_users']}")
-        print(f" Priority Tier:  {t['priority'].upper()}")
-        print(f" Workflow State: {t['status'].upper()}")
-        print(f" Assigned Staff: {t['assigned_to'] if t['assigned_to'] else 'None'}")
-        print("=====================================================")
-if __name__ == "__main__":
-    app = CampusFlow()
-    while True:
-        action = input("Enter execution command index (1-7): ").strip()
-        print("\n--- CAMPUSFLOW INTERFACE ---")
-        print("1. Create Ticket (F1)")
-        print("2. List / View Tickets (F2)")
-        print("3. Exit")
-       
-        if action in ["1", "2"]:
-            app.load_data()
-        if action == "1":
-            app.create_ticket()
-        elif action == "2":
-            app.list_view_tickets()
-        elif action == "3":
-            print("\nShutting down cleanly.")
-            break
-        else:
-            print("[Error] Invalid selection.")
+class ValidationError(TicketError):
+    """Raised when user input is rejected."""
+
+
+class TicketNotFoundError(TicketError):
+    """Raised when a ticket ID does not exist."""
+
+
+# ---------------------------------------------------------------- validation
+def validate_title(raw):
+    title = (raw or "").strip()
+    if not title:
+        raise ValidationError("Title cannot be blank.")
+    return title
+
+
+def normalize_category(raw):
+    value = (raw or "").strip().lower()
+    for category in CATEGORIES:
+        if category.lower() == value:
+            return category
+    raise ValidationError(f"Category must be one of: {', '.join(CATEGORIES)}.")
+
+
+def normalize_urgency(raw):
+    value = (raw or "").strip().lower()
+    if value not in URGENCIES:
+        raise ValidationError(f"Urgency must be one of: {', '.join(URGENCIES)}.")
+    return value
+
+
+def parse_affected_users(raw):
+    text = str(raw).strip()
+    if not (text.isascii() and text.isdigit()):
+        raise ValidationError("Affected users must be a whole number greater than 0.")
+    number = int(text)
+    if number <= 0:
+        raise ValidationError("Affected users must be greater than 0.")
+    return number
+
+
+# ------------------------------------------------------------------ priority
+def calculate_priority(urgency, affected_users):
+    """Rules are checked in this exact order (design contract)."""
+    if urgency == "high" and affected_users >= 10:
+        return "critical"
+    if urgency == "high" or affected_users >= 10:
+        return "high"
+    if urgency == "medium" or affected_users >= 3:
+        return "medium"
+    return "low"
+
+
+# ----------------------------------------------------------------------- IDs
+def ticket_number(ticket_id):
+    """'T012' -> 12 (used for numeric tie-breaking and ID generation)."""
+    return int(ticket_id[1:])
+
+
+def next_ticket_id(tickets):
+    """Next ID is max existing number + 1, so IDs stay unique after a reload."""
+    highest = max((ticket_number(t["id"]) for t in tickets), default=0)
+    return f"T{highest + 1:03d}"
+
+
+# -------------------------------------------------------------------- create
+def create_ticket(tickets, title, category, urgency, affected_users):
+    """Validate input, build the ticket, append it to `tickets` and return it."""
+    ticket = {
+        "id": next_ticket_id(tickets),
+        "title": validate_title(title),
+        "category": normalize_category(category),
+        "urgency": normalize_urgency(urgency),
+        "affected_users": parse_affected_users(affected_users),
+        "priority": None,
+        "status": "open",
+        "assigned_to": None,
+    }
+    ticket["priority"] = calculate_priority(ticket["urgency"], ticket["affected_users"])
+    tickets.append(ticket)
+    return ticket
+
+
+# -------------------------------------------------------------------- lookup
+def get_ticket(tickets, ticket_id):
+    """Return the ticket with this ID (case-insensitive) or raise."""
+    wanted = (ticket_id or "").strip().upper()
+    for ticket in tickets:
+        if ticket["id"] == wanted:
+            return ticket
+    raise TicketNotFoundError(f"No ticket with ID '{(ticket_id or '').strip()}'.")
+
+
+# ------------------------------------------------------------------- display
+def format_ticket_list(tickets):
+    if not tickets:
+        return "No tickets recorded yet."
+    lines = [
+        f"{'ID':<6} | {'Title':<24} | {'Category':<9} | {'Priority':<8} | {'Status':<11} | Assigned",
+        "-" * 82,
+    ]
+    for t in tickets:
+        title = t["title"] if len(t["title"]) <= 24 else t["title"][:21] + "..."
+        lines.append(
+            f"{t['id']:<6} | {title:<24} | {t['category']:<9} | {t['priority']:<8} | "
+            f"{t['status']:<11} | {t['assigned_to'] or 'unassigned'}"
+        )
+    return "\n".join(lines)
+
+
+def format_ticket_detail(ticket):
+    return "\n".join(
+        [
+            f"=== Ticket {ticket['id']} ===",
+            f"Title:          {ticket['title']}",
+            f"Category:       {ticket['category']}",
+            f"Urgency:        {ticket['urgency']}",
+            f"Affected users: {ticket['affected_users']}",
+            f"Priority:       {ticket['priority']}",
+            f"Status:         {ticket['status']}",
+            f"Assigned to:    {ticket['assigned_to'] or 'unassigned'}",
+        ]
+    )
