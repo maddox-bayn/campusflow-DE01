@@ -46,13 +46,20 @@ def normalize_urgency(raw):
 
 
 def parse_affected_users(raw):
-    text = str(raw).strip()
-    if not (text.isascii() and text.isdigit()):
+    # Explicitly reject booleans (since isinstance(True, int) is True in Python) and floats
+    if isinstance(raw, bool) or isinstance(raw, float):
         raise ValidationError("Affected users must be a whole number greater than 0.")
-    number = int(text)
-    if number <= 0:
-        raise ValidationError("Affected users must be greater than 0.")
-    return number
+    if isinstance(raw, int):
+        if raw <= 0:
+            raise ValidationError("Affected users must be greater than 0.")
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.isascii() and text.isdigit():
+            number = int(text)
+            if number > 0:
+                return number
+    raise ValidationError("Affected users must be a whole number greater than 0.")
 
 
 # ------------------------------------------------------------------ priority
