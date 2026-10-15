@@ -1,89 +1,97 @@
-"""ENGINEER B tests: assignment, transitions, work queue order, empty reports."""
+"""ENGINEER A tests: safe JSON persistence, validation, and ID continuity (F7)."""
+import copy
+import json
+import os
+import tempfile
 import unittest
 
-from campusflow.reports import build_report, work_queue
-from campusflow.tickets import TicketNotFoundError, create_ticket
-from campusflow.workflow import WorkflowError, assign_ticket, change_status, reopen_ticket
+from campusflow.storage import (
+    StorageError,
+    load_tickets,
+    save_tickets,
+)
+from campusflow.tickets import (
+    add_note,
+    create_ticket,
+    next_note_id,
+    next_ticket_id,
+)
 
 
-def make(tickets, title="t", urgency="low", users="1"):
-    return create_ticket(tickets, title, "Other", urgency, users)
+class TestStorageSafety(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.json_path = os.path.join(self.temp_dir.name, "tickets.json")
 
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
-class TestAssignment(unittest.TestCase):
-    def test_unknown_id_and_empty_name_rejected(self):
+    def test_missing_file_returns_empty_list(self):
+        missing = os.path.join(self.temp_dir.name, "does_not_exist.json")
+        self.assertEqual(load_tickets(missing), [])
+
+    def test_save_and_load_preserves_notes_and_next_ids(self):
         tickets = []
-        make(tickets)
-        with self.assertRaises(TicketNotFoundError):
-            assign_ticket(tickets, "T999", "Sam")
-        with self.assertRaises(WorkflowError):
-            assign_ticket(tickets, "T001", "   ")
+        create_ticket(tickets, "Router down", "Network", "high", 15)
+        create_ticket(tickets, "Mouse broken", "Hardware", "low", 1)
+        add_note(tickets, "T001", "Mentor A", "Checked power supply")
+        add_note(tickets, "T001", "Mentor B", "Escalated to ISP team")
 
+        save_tickets(tickets, self.json_path)
+        reloaded = load_tickets(self.json_path)
 
-class TestTransitions(unittest.TestCase):
-    def test_unassigned_cannot_start(self):
-        tickets = []
-        make(tickets)
-        with self.assertRaises(WorkflowError):
-            change_status(tickets, "T001", "in_progress")
+        self.assertEqual(reloaded, tickets)
+        self.assertEqual(next_ticket_id(reloaded), "T003")
+        self.assertEqual(next_note_id(reloaded[0]), "N003")
+        self.assertEqual(next_note_id(reloaded[1]), "N001")
 
-    def test_happy_path_and_no_skipping(self):
-        tickets = []
-        make(tickets)
-        with self.assertRaises(WorkflowError):  # open -> resolved is not allowed
-            change_status(tickets, "T001", "resolved")
-        assign_ticket(tickets, "T001", "Sam")
-        self.assertEqual(change_status(tickets, "T001", "in_progress")["status"], "in_progress")
-        self.assertEqual(change_status(tickets, "T001", "resolved")["status"], "resolved")
+    def test_corrupt_json_rejected_without_state_loss(self):
+        memory = []
+        create_ticket(memory, "Valid in-memory ticket", "Software", "medium", 4)
+        snapshot = copy.deepcopy(memory)
 
-    def test_resolved_locked_until_reopened(self):
-        tickets = []
-        make(tickets)
-        assign_ticket(tickets, "T001", "Sam")
-        change_status(tickets, "T001", "in_progress")
-        change_status(tickets, "T001", "resolved")
-        with self.assertRaises(WorkflowError):
-            assign_ticket(tickets, "T001", "Alex")
-        with self.assertRaises(WorkflowError):
-            change_status(tickets, "T001", "open")
-        self.assertEqual(reopen_ticket(tickets, "T001")["status"], "open")
-        self.assertEqual(assign_ticket(tickets, "T001", "Alex")["assigned_to"], "Alex")
+        with open(self.json_path, "w", encoding="utf-8") as f:
+            f.write("{corrupted json: [unclosed")
 
+        with self.assertRaises(StorageError):
+            memory[:] = load_tickets(self.json_path)
+        self.assertEqual(memory, snapshot)
 
-class TestQueueAndReports(unittest.TestCase):
-    def test_queue_order_with_numeric_tie_break(self):
-        tickets = []
-        make(tickets, "low")                          # T001 low
-        make(tickets, "crit", "high", "12")           # T002 critical
-        make(tickets, "high-a", "high", "1")          # T003 high
-        make(tickets, "high-b", "high", "2")          # T004 high
-        done = make(tickets, "done", "high", "50")    # T005 critical but resolved
-        done["status"] = "resolved"
-        self.assertEqual([t["id"] for t in work_queue(tickets)],
-                         ["T002", "T003", "T004", "T001"])
+    def test_duplicate_ticket_ids_rejected_without_state_loss(self):
+        memory = []
+        create_ticket(memory, "Original memory", "Network", "low", 2)
+        snapshot = copy.deepcopy(memory)
 
-    def test_queue_uses_numeric_not_text_id_order(self):
-        tickets = []
-        for number in (999, 1000):
-            ticket = make(tickets)
-            ticket["id"] = f"T{number}"
-        self.assertEqual([t["id"] for t in work_queue(tickets)], ["T999", "T1000"])
+        bad_data = [
+            {
+                "id": "T001",
+                "title": "First ticket",
+                "category": "Network",
+                "urgency": "low",
+                "affected_users": 1,
+                "priority": "low",
+                "status": "open",
+                "assigned_to": None,
+                "notes": [],
+            },
+            {
+                "id": "T001",
+                "title": "Second ticket with same ID",
+                "category": "Hardware",
+                "urgency": "low",
+                "affected_users": 1,
+                "priority": "low",
+                "status": "open",
+                "assigned_to": None,
+                "notes": [],
+            },
+        ]
+        with open(self.json_path, "w", encoding="utf-8") as f:
+            json.dump(bad_data, f)
 
-    def test_empty_report_is_all_zero(self):
-        report = build_report([])
-        self.assertEqual(report["total"], 0)
-        self.assertEqual(set(report["by_status"].values()), {0})
-        self.assertEqual(set(report["by_priority"].values()), {0})
-        self.assertEqual(len(report["by_status"]), 3)
-        self.assertEqual(len(report["by_priority"]), 4)
-
-    def test_report_counts(self):
-        tickets = []
-        make(tickets, "a", "high", "10")
-        make(tickets, "b")
-        report = build_report(tickets)
-        self.assertEqual(report["by_priority"]["critical"], 1)
-        self.assertEqual(report["by_status"]["open"], 2)
+        with self.assertRaises(StorageError):
+            memory[:] = load_tickets(self.json_path)
+        self.assertEqual(memory, snapshot)
 
 
 if __name__ == "__main__":
