@@ -16,24 +16,15 @@ from campusflow.storage import StorageError, load_tickets, save_tickets
 from campusflow.tickets import (
     CATEGORIES,
     TicketError,
+    add_note,
     create_ticket,
     format_ticket_detail,
     format_ticket_list,
+    format_ticket_notes,
     get_ticket,
 )
 from campusflow.understanding_check import run_understanding_check
 from campusflow.workflow import STATUSES, assign_ticket, change_status, reopen_ticket
-
-# Coordinate with Engineer A on where add_note lives (e.g., campusflow.notes or campusflow.tickets).
-# This try/except allows your branch to run even before Engineer A merges add_note!
-try:
-    from campusflow.notes import add_note
-except ImportError:
-    try:
-        from campusflow.tickets import add_note
-    except ImportError:
-        def add_note(tickets, ticket_id, author, message):
-            raise TicketError("add_note() is not yet connected from Engineer A's module.")
 
 DATA_FILE = "tickets.json"
 
@@ -142,14 +133,7 @@ def handle_add_note(tickets):
 
 def handle_view_notes(tickets):
     ticket_id = input("Ticket ID: ")
-    ticket = get_ticket(tickets, ticket_id)
-    notes = ticket.get("notes", [])
-    if not notes:
-        print(f"No follow-up notes for {ticket['id']}.")
-        return
-    print(f"=== Notes for {ticket['id']} ({ticket['status']}) ===")
-    for n in notes:
-        print(f"[{n['note_id']}] {n['author']}: {n['message']}")
+    print(format_ticket_notes(tickets, ticket_id))
 
 
 def handle_understanding_check(tickets):
