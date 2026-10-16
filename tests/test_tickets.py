@@ -64,6 +64,12 @@ class TestValidation(unittest.TestCase):
             assign_ticket(tickets, "T001", "Bob")
         self.assertEqual(tickets, snapshot)
 
+    def test_malformed_ticket_id_raises_validation_error(self):
+        # Covers Engineer B's review: strict validation on ticket_number
+        from campusflow.tickets import ticket_number
+        for bad_id in ["ABC", "T-5", "T000", "", None, 123]:
+            with self.subTest(bad_id=bad_id), self.assertRaises(ValidationError):
+                ticket_number(bad_id)
 
 class TestPriority(unittest.TestCase):
     def test_exact_rules(self):
