@@ -77,14 +77,23 @@ def calculate_priority(urgency, affected_users):
 # ----------------------------------------------------------------------- IDs
 def ticket_number(ticket_id):
     """'T012' -> 12 (used for numeric tie-breaking and ID generation)."""
-    return int(ticket_id[1:])
+    if (
+        not isinstance(ticket_id, str)
+        or len(ticket_id) < 2
+        or not ticket_id.startswith("T")
+        or not (ticket_id[1:].isascii() and ticket_id[1:].isdigit())
+    ):
+        raise ValidationError(f"Invalid ticket ID format: '{ticket_id}'.")
+    num = int(ticket_id[1:])
+    if num <= 0:
+        raise ValidationError(f"Invalid ticket ID number: '{ticket_id}'.")
+    return num
 
 
 def next_ticket_id(tickets):
     """Next ID is max existing number + 1, so IDs stay unique after a reload."""
     highest = max((ticket_number(t["id"]) for t in tickets), default=0)
     return f"T{highest + 1:03d}"
-
 
 # -------------------------------------------------------------------- create
 def create_ticket(tickets, title, category, urgency, affected_users):
